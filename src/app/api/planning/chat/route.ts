@@ -4,9 +4,8 @@ import { authOptions } from "@/lib/auth";
 import { google } from "googleapis";
 import OpenAI from "openai";
 import { SYSTEM_PROMPT } from "@/lib/ai/systemPrompt";
-import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+
 // Initialize OpenAI client - assumes OPENAI_API_KEY is in env
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY || "stub-key",
