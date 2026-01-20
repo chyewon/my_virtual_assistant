@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
         const data = await response.json();
 
         return NextResponse.json({
-            predictions: data.predictions?.map((p: any) => ({
+            predictions: data.predictions?.map((p: { place_id: string; description: string; structured_formatting: unknown }) => ({
                 place_id: p.place_id,
                 description: p.description,
                 structured_formatting: p.structured_formatting,

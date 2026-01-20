@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
 
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
-        const eventData: any = {
+        const eventData: Record<string, unknown> = {
             summary: title,
             description: description || "",
             location: location || "",
@@ -103,7 +103,7 @@ export async function PUT(request: NextRequest) {
 
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
-        const eventData: any = {
+        const eventData: Record<string, unknown> = {
             summary: title,
             description: description || "",
             location: location || "",
