@@ -113,8 +113,9 @@ ${JSON.stringify(events, null, 2)}
         // Handle Function Calls (Tool Calls)
         if (aiMessage.tool_calls) {
             const toolCall = aiMessage.tool_calls[0];
-            if (toolCall.type === 'function' && toolCall.function.name === "create_calendar_event") {
-                const args = JSON.parse(toolCall.function.arguments);
+            const toolCallFunction = toolCall && "function" in toolCall ? toolCall.function : undefined;
+            if (toolCall?.type === "function" && toolCallFunction?.name === "create_calendar_event") {
+                const args = JSON.parse(toolCallFunction.arguments || "{}");
 
                 // Execute the calendar creation
                 await calendar.events.insert({

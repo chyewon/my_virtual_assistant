@@ -12,6 +12,7 @@ export default function DashboardPage() {
     const { data: session, status } = useSession();
     const router = useRouter();
     const [aiCostUsed, setAiCostUsed] = useState(2.34);
+    const userImage = session?.user?.image;
 
     useEffect(() => {
         if (status === "unauthenticated") {
@@ -69,15 +70,15 @@ export default function DashboardPage() {
 
                         {/* User Profile */}
                         <div className="flex items-center gap-2">
-                            {session.user?.image && (
+                            {userImage ? (
                                 <Image
-                                    src={session.user.image}
+                                    src={userImage}
                                     alt={session.user.name || "User"}
                                     width={32}
                                     height={32}
                                     className="rounded-full border border-slate-700"
                                 />
-                            )}
+                            ) : null}
                             <button
                                 onClick={() => signOut({ callbackUrl: "/" })}
                                 className="text-sm text-slate-400 hover:text-white transition-colors"
