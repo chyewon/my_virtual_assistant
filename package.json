@@ -16,6 +16,7 @@
     "@capacitor/cli": "^8.0.1",
     "@capacitor/core": "^8.0.1",
     "@google/generative-ai": "^0.24.1",
+    "@t3-oss/env-nextjs": "^0.13.10",
     "googleapis": "^170.1.0",
     "next": "16.1.4",
     "next-auth": "^4.24.13",
@@ -23,7 +24,8 @@
     "openai": "^6.16.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "zod": "^4.3.5"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { env } from "@/env";
 
 export async function GET(request: NextRequest) {
     try {
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
         }
 
         // Use Google Places Autocomplete API
-        const apiKey = process.env.GOOGLE_PLACES_API_KEY || process.env.GOOGLE_CLIENT_ID?.split("-")[0];
+        const apiKey = env.GOOGLE_PLACES_API_KEY || env.GOOGLE_CLIENT_ID?.split("-")[0];
 
         // If no separate Places API key, we'll use a simpler approach with the session token
         // Google Calendar has built-in Places integration, so we simulate similar results
