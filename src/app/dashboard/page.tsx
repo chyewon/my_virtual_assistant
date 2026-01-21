@@ -7,11 +7,15 @@ import Image from "next/image";
 import WeeklyCalendar from "@/components/dashboard/WeeklyCalendar";
 import TodaysTasks from "@/components/dashboard/TodaysTasks";
 import ActivityLog from "@/components/dashboard/ActivityLog";
+import TaskTable from "@/components/dashboard/TaskTable";
+import PriorityEmails from "@/components/PriorityEmails";
+import SentEmails from "@/components/SentEmails";
 
 export default function DashboardPage() {
     const { data: session, status } = useSession();
     const router = useRouter();
     const [aiCostUsed, setAiCostUsed] = useState(2.34);
+    const [visibleColumns, setVisibleColumns] = useState<string[]>(["calendar", "tasks"]);
     const userImage = session?.user?.image;
 
     useEffect(() => {
@@ -36,6 +40,18 @@ export default function DashboardPage() {
         if (aiCostUsed < 7) return "text-green-400";
         if (aiCostUsed < 9) return "text-yellow-400";
         return "text-red-400";
+    };
+
+    const toggleColumn = (id: string) => {
+        if (visibleColumns.includes(id)) {
+            // If already visible and there are more than 2, maybe allow hiding?
+            // But user asked for 50/50 split, implying exactly two.
+            // If it's already visible, do nothing or swap positions.
+            return;
+        }
+
+        // Add the new one to the end and keep only last two
+        setVisibleColumns(prev => [prev[1], id]);
     };
 
     return (
@@ -73,7 +89,7 @@ export default function DashboardPage() {
                             {userImage ? (
                                 <Image
                                     src={userImage}
-                                    alt={session.user.name || "User"}
+                                    alt={session.user?.name || "User"}
                                     width={32}
                                     height={32}
                                     className="rounded-full border border-slate-700"
@@ -90,25 +106,91 @@ export default function DashboardPage() {
                 </div>
             </header>
 
-            {/* Main 3-Column Dashboard - 2:1:1 ratio */}
-            <main className="flex-1 p-4 max-w-screen-2xl mx-auto w-full">
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 h-[calc(100vh-5rem)]">
-                    {/* LEFT COLUMN - Weekly Calendar (50%) */}
-                    <div className="lg:col-span-2 bg-slate-900/50 border border-slate-800 rounded-xl p-4 overflow-y-auto">
-                        <WeeklyCalendar />
-                    </div>
+            <div className="flex-1 flex overflow-hidden">
+                {/* Left Sidebar Navigation */}
+                <aside className="w-16 bg-slate-900 border-r border-slate-800 flex flex-col items-center py-6 gap-6">
+                    <button
+                        onClick={() => toggleColumn("calendar")}
+                        className={`p-3 rounded-xl transition-all ${visibleColumns.includes("calendar") ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}
+                        title="Calendar"
+                    >
+                        <span className="text-xl">📅</span>
+                    </button>
+                    <button
+                        onClick={() => toggleColumn("tasks")}
+                        className={`p-3 rounded-xl transition-all ${visibleColumns.includes("tasks") ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}
+                        title="Daily Tasks"
+                    >
+                        <span className="text-xl">📋</span>
+                    </button>
+                    <button
+                        onClick={() => toggleColumn("activity")}
+                        className={`p-3 rounded-xl transition-all ${visibleColumns.includes("activity") ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}
+                        title="Activity Log"
+                    >
+                        <span className="text-xl">📊</span>
+                    </button>
+                    <button
+                        onClick={() => toggleColumn("emails")}
+                        className={`p-3 rounded-xl transition-all ${visibleColumns.includes("emails") ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/20" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}
+                        title="Emails"
+                    >
+                        <span className="text-xl">📧</span>
+                    </button>
+                </aside>
 
-                    {/* MIDDLE COLUMN - Today's To-Do (25%) */}
-                    <div className="lg:col-span-1 bg-slate-900/50 border border-slate-800 rounded-xl p-4 overflow-y-auto">
-                        <TodaysTasks />
-                    </div>
+                {/* Main Dashboard Area */}
+                <main className="flex-1 p-4 overflow-hidden">
+                    <div className="grid grid-cols-4 gap-4 h-full">
+                        {visibleColumns.map((colId) => {
+                            const isEmails = colId === "emails";
+                            const hasEmails = visibleColumns.includes("emails");
 
-                    {/* RIGHT COLUMN - Activity Log (25%) */}
-                    <div className="lg:col-span-1 bg-slate-900/50 border border-slate-800 rounded-xl p-4 overflow-y-auto">
-                        <ActivityLog />
+                            // If emails is visible, it takes 3/4 (grid-cols-4 and col-span-3)
+                            // The other column takes 1/4 (col-span-1)
+                            // If emails is NOT visible, it's a 2/2 split (col-span-2)
+                            const colSpan = hasEmails
+                                ? (isEmails ? "col-span-3" : "col-span-1")
+                                : "col-span-2";
+
+                            return (
+                                <div key={colId} className={`${colSpan} bg-slate-900/50 border border-slate-800 rounded-xl p-4 overflow-hidden flex flex-col transition-all duration-300`}>
+                                    {colId === "calendar" && (
+                                        <div className="flex-1 overflow-y-auto">
+                                            <WeeklyCalendar />
+                                        </div>
+                                    )}
+                                    {colId === "tasks" && (
+                                        <div className="flex-1 overflow-y-auto">
+                                            <TodaysTasks expanded={true} />
+                                        </div>
+                                    )}
+                                    {colId === "activity" && (
+                                        <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+                                            <div className="flex-1 overflow-y-auto min-h-0">
+                                                <ActivityLog />
+                                            </div>
+                                            <div className="flex-1 overflow-y-auto min-h-0 border-t border-slate-800 pt-4">
+                                                <TaskTable />
+                                            </div>
+                                        </div>
+                                    )}
+                                    {colId === "emails" && (
+                                        <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+                                            <div className="flex-1 min-h-0">
+                                                <PriorityEmails />
+                                            </div>
+                                            <div className="flex-1 min-h-0">
+                                                <SentEmails />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })}
                     </div>
-                </div>
-            </main>
+                </main>
+            </div>
         </div>
     );
 }

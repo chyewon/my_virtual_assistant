@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     }
 }
 
-// UPDATE an existing event
+// UPDATE an existing event (supports partial updates)
 export async function PUT(request: NextRequest) {
     try {
         const session = await getServerSession(authOptions);
@@ -92,8 +92,8 @@ export async function PUT(request: NextRequest) {
         const body = await request.json();
         const { eventId, title, description, startTime, endTime, location, attendees } = body;
 
-        if (!eventId || !title || !startTime || !endTime) {
-            return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+        if (!eventId) {
+            return NextResponse.json({ error: "Event ID required" }, { status: 400 });
         }
 
         const oauth2Client = new google.auth.OAuth2();
@@ -103,23 +103,31 @@ export async function PUT(request: NextRequest) {
 
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });
 
+        // Fetch existing event to support partial updates
+        const existingEvent = await calendar.events.get({
+            calendarId: "primary",
+            eventId: eventId,
+        });
+
         const eventData: Record<string, unknown> = {
-            summary: title,
-            description: description || "",
-            location: location || "",
-            start: {
+            summary: title ?? existingEvent.data.summary,
+            description: description ?? existingEvent.data.description ?? "",
+            location: location ?? existingEvent.data.location ?? "",
+            start: startTime ? {
                 dateTime: new Date(startTime).toISOString(),
                 timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
-            end: {
+            } : existingEvent.data.start,
+            end: endTime ? {
                 dateTime: new Date(endTime).toISOString(),
                 timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
+            } : existingEvent.data.end,
         };
 
-        // Add attendees if provided
+        // Add attendees if provided, otherwise keep existing
         if (attendees && attendees.length > 0) {
             eventData.attendees = attendees.map((email: string) => ({ email }));
+        } else if (existingEvent.data.attendees) {
+            eventData.attendees = existingEvent.data.attendees;
         }
 
         const event = await calendar.events.update({

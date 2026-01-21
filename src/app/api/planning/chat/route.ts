@@ -108,9 +108,6 @@ ${JSON.stringify(events, null, 2)}
             apiKey: env.OPENAI_API_KEY,
         });
 
-        // Add rate limiting headers to prevent abuse
-        const clientIP = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
-
         const completion = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [
@@ -142,28 +139,54 @@ ${JSON.stringify(events, null, 2)}
 
         const aiMessage = completion.choices[0].message;
 
-        // Handle Function Calls (Tool Calls)
-        if (aiMessage.tool_calls) {
-            const toolCall = aiMessage.tool_calls[0];
-            const toolCallFunction = toolCall && "function" in toolCall ? toolCall.function : undefined;
-            if (toolCall?.type === "function" && toolCallFunction?.name === "create_calendar_event") {
-                const args = JSON.parse(toolCallFunction.arguments || "{}");
+        // Handle Function Calls (Tool Calls) - process ALL tool calls
+        if (aiMessage.tool_calls && aiMessage.tool_calls.length > 0) {
+            const createdEvents: string[] = [];
+            const failedEvents: string[] = [];
 
-                // Execute the calendar creation
-                await calendar.events.insert({
-                    calendarId: "primary",
-                    requestBody: {
-                        summary: args.title,
-                        description: args.description,
-                        start: { dateTime: args.startTime },
-                        end: { dateTime: args.endTime },
+            for (const toolCall of aiMessage.tool_calls) {
+                const toolCallFunction = toolCall && "function" in toolCall ? toolCall.function : undefined;
+                if (toolCall?.type === "function" && toolCallFunction?.name === "create_calendar_event") {
+                    const args = JSON.parse(toolCallFunction.arguments || "{}");
+
+                    try {
+                        // Execute the calendar creation
+                        await calendar.events.insert({
+                            calendarId: "primary",
+                            requestBody: {
+                                summary: args.title,
+                                description: args.description,
+                                start: { dateTime: args.startTime },
+                                end: { dateTime: args.endTime },
+                            }
+                        });
+
+                        createdEvents.push(`"${args.title}" at ${new Date(args.startTime).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`);
+                    } catch (eventError) {
+                        console.error(`Failed to create event "${args.title}":`, eventError);
+                        failedEvents.push(`"${args.title}" (invalid time range)`);
                     }
-                });
+                }
+            }
+
+            if (createdEvents.length > 0 || failedEvents.length > 0) {
+                let summary = "";
+
+                if (createdEvents.length > 0) {
+                    summary = createdEvents.length === 1
+                        ? `I've scheduled ${createdEvents[0]}.`
+                        : `I've scheduled ${createdEvents.length} events:\n• ${createdEvents.join('\n• ')}`;
+                }
+
+                if (failedEvents.length > 0) {
+                    summary += summary ? "\n\n" : "";
+                    summary += `⚠️ Failed to create ${failedEvents.length} event(s): ${failedEvents.join(', ')}. Please check the time ranges.`;
+                }
 
                 return NextResponse.json({
                     message: {
                         role: "assistant",
-                        content: `I've scheduled "${args.title}" for ${new Date(args.startTime).toLocaleTimeString()}.`
+                        content: summary
                     }
                 });
             }

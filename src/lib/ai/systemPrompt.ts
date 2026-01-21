@@ -24,4 +24,7 @@ Events are provided in JSON format: { start: string, end: string, title: string 
 You have the ability to call functions to manage the calendar:
 -   \`createCalendarEvent(title, startTime, endTime, description, location)\`
 -   \`suggestBreakdown(taskTitle)\` (to propose sub-tasks)
+
+### Batch Operations:
+When the user provides a list of multiple tasks or events to schedule, you MUST create ALL of them by calling the create_calendar_event function multiple times in a single response. Do not stop after creating just one event. Process the entire list.
 `;

@@ -44,6 +44,13 @@ export default function WeeklyCalendar() {
     const [saving, setSaving] = useState(false);
     const [now, setNow] = useState(new Date());
     const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+    // Drag-to-resize state
+    const [resizingEvent, setResizingEvent] = useState<CalendarEvent | null>(null);
+    const [resizeEdge, setResizeEdge] = useState<'top' | 'bottom' | null>(null);
+    const [resizePreview, setResizePreview] = useState<{ top: string; height: string } | null>(null);
+    const dragStartRef = useRef<{ y: number; startHour: number; endHour: number } | null>(null);
+
     const [formData, setFormData] = useState<EventFormData>({
         title: "",
         date: "",
@@ -271,6 +278,114 @@ export default function WeeklyCalendar() {
         });
     };
 
+    // Drag-to-resize handlers
+    const handleResizeStart = (event: CalendarEvent, edge: 'top' | 'bottom', e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const start = new Date(event.startTime);
+        const end = new Date(event.endTime);
+
+        setResizingEvent(event);
+        setResizeEdge(edge);
+        dragStartRef.current = {
+            y: e.clientY,
+            startHour: start.getHours() + start.getMinutes() / 60,
+            endHour: end.getHours() + end.getMinutes() / 60,
+        };
+    };
+
+    const handleResizeMove = useCallback((e: MouseEvent) => {
+        if (!resizingEvent || !dragStartRef.current || !scrollContainerRef.current) return;
+
+        const containerRect = scrollContainerRef.current.getBoundingClientRect();
+        const hourHeight = (HOURS.length * 48) / 24; // pixels per hour
+        const deltaY = e.clientY - dragStartRef.current.y;
+        const deltaHours = deltaY / hourHeight;
+
+        let newStartHour = dragStartRef.current.startHour;
+        let newEndHour = dragStartRef.current.endHour;
+
+        if (resizeEdge === 'top') {
+            newStartHour = Math.max(0, Math.min(newEndHour - 0.25, dragStartRef.current.startHour + deltaHours));
+            // Snap to 15-minute increments
+            newStartHour = Math.round(newStartHour * 4) / 4;
+        } else if (resizeEdge === 'bottom') {
+            newEndHour = Math.min(24, Math.max(newStartHour + 0.25, dragStartRef.current.endHour + deltaHours));
+            // Snap to 15-minute increments
+            newEndHour = Math.round(newEndHour * 4) / 4;
+        }
+
+        const top = (newStartHour / 24) * 100;
+        const height = ((newEndHour - newStartHour) / 24) * 100;
+        setResizePreview({ top: `${top}%`, height: `${height}%` });
+    }, [resizingEvent, resizeEdge]);
+
+    const handleResizeEnd = useCallback(async () => {
+        if (!resizingEvent || !resizePreview || !dragStartRef.current) {
+            setResizingEvent(null);
+            setResizeEdge(null);
+            setResizePreview(null);
+            dragStartRef.current = null;
+            return;
+        }
+
+        // Calculate new times from preview
+        const topPercent = parseFloat(resizePreview.top) / 100;
+        const heightPercent = parseFloat(resizePreview.height) / 100;
+        const newStartHour = topPercent * 24;
+        const newEndHour = (topPercent + heightPercent) * 24;
+
+        // Get date from original event
+        const originalStart = new Date(resizingEvent.startTime);
+        const newStart = new Date(originalStart);
+        newStart.setHours(Math.floor(newStartHour), Math.round((newStartHour % 1) * 60), 0, 0);
+        const newEnd = new Date(originalStart);
+        newEnd.setHours(Math.floor(newEndHour), Math.round((newEndHour % 1) * 60), 0, 0);
+
+        // Reset state first
+        const eventId = resizingEvent.id;
+        setResizingEvent(null);
+        setResizeEdge(null);
+        setResizePreview(null);
+        dragStartRef.current = null;
+
+        // Update via API
+        try {
+            const response = await fetch("/api/calendar/event", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    eventId,
+                    startTime: newStart.toISOString(),
+                    endTime: newEnd.toISOString(),
+                }),
+            });
+
+            if (!response.ok) throw new Error("Failed to update event");
+            fetchEvents();
+        } catch (err) {
+            console.error("Failed to resize event:", err);
+            fetchEvents(); // Refresh to reset UI
+        }
+    }, [resizingEvent, resizePreview, fetchEvents]);
+
+    // Document-level mouse listeners for drag
+    useEffect(() => {
+        if (!resizingEvent) return;
+
+        const handleMove = (e: MouseEvent) => handleResizeMove(e);
+        const handleEnd = () => handleResizeEnd();
+
+        document.addEventListener('mousemove', handleMove);
+        document.addEventListener('mouseup', handleEnd);
+
+        return () => {
+            document.removeEventListener('mousemove', handleMove);
+            document.removeEventListener('mouseup', handleEnd);
+        };
+    }, [resizingEvent, handleResizeMove, handleResizeEnd]);
+
     if (loading) {
         return (
             <div className="h-full flex flex-col">
@@ -371,16 +486,60 @@ export default function WeeklyCalendar() {
 
                                     {dayEvents.map((event) => {
                                         const pos = getEventPosition(event);
+                                        const isResizing = resizingEvent?.id === event.id;
+                                        const displayPos = isResizing && resizePreview ? resizePreview : pos;
+
+                                        // Calculate preview time for display during resize
+                                        let displayTime = formatTime(event.startTime);
+                                        let displayEndTime = formatTime(event.endTime);
+                                        if (isResizing && resizePreview) {
+                                            const topPercent = parseFloat(resizePreview.top) / 100;
+                                            const heightPercent = parseFloat(resizePreview.height) / 100;
+                                            const previewStartHour = topPercent * 24;
+                                            const previewEndHour = (topPercent + heightPercent) * 24;
+
+                                            const startH = Math.floor(previewStartHour);
+                                            const startM = Math.round((previewStartHour % 1) * 60);
+                                            const endH = Math.floor(previewEndHour);
+                                            const endM = Math.round((previewEndHour % 1) * 60);
+
+                                            const formatPreviewTime = (h: number, m: number) => {
+                                                const period = h >= 12 ? 'PM' : 'AM';
+                                                const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+                                                return `${hour12}:${String(m).padStart(2, '0')} ${period}`;
+                                            };
+
+                                            displayTime = formatPreviewTime(startH, startM);
+                                            displayEndTime = formatPreviewTime(endH, endM);
+                                        }
+
                                         return (
                                             <div
                                                 key={event.id}
                                                 onDoubleClick={(e) => handleEventDoubleClick(event, e)}
-                                                className="absolute left-0.5 right-0.5 bg-indigo-500/40 border-l-2 border-indigo-500 rounded px-1 py-0.5 overflow-hidden cursor-pointer hover:bg-indigo-500/60 transition-colors"
-                                                style={{ top: pos.top, height: pos.height, minHeight: "20px" }}
+                                                className={`absolute left-0.5 right-0.5 bg-indigo-500/40 border-l-2 border-indigo-500 rounded overflow-hidden cursor-pointer hover:bg-indigo-500/60 transition-colors group ${isResizing ? 'bg-indigo-500/60 z-30' : ''}`}
+                                                style={{ top: displayPos.top, height: displayPos.height, minHeight: "20px" }}
                                                 title={`${event.title}${event.location ? `\n📍 ${event.location}` : ""}`}
                                             >
-                                                <div className="text-xs font-medium text-white truncate">{event.title}</div>
-                                                <div className="text-xs text-indigo-200 truncate">{formatTime(event.startTime)}</div>
+                                                {/* Top resize handle */}
+                                                <div
+                                                    className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize opacity-0 group-hover:opacity-100 hover:bg-indigo-300/30 transition-opacity"
+                                                    onMouseDown={(e) => handleResizeStart(event, 'top', e)}
+                                                />
+
+                                                {/* Event content */}
+                                                <div className="px-1 py-0.5">
+                                                    <div className="text-xs font-medium text-white truncate">{event.title}</div>
+                                                    <div className={`text-xs truncate ${isResizing ? 'text-yellow-300 font-medium' : 'text-indigo-200'}`}>
+                                                        {displayTime} - {displayEndTime}
+                                                    </div>
+                                                </div>
+
+                                                {/* Bottom resize handle */}
+                                                <div
+                                                    className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize opacity-0 group-hover:opacity-100 hover:bg-indigo-300/30 transition-opacity"
+                                                    onMouseDown={(e) => handleResizeStart(event, 'bottom', e)}
+                                                />
                                             </div>
                                         );
                                     })}
