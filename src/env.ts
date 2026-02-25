@@ -19,6 +19,8 @@ export const env = createEnv({
     DATABASE_URL: z.string().url().optional(),
     VAPID_PRIVATE_KEY: z.string().optional(),
     VAPID_SUBJECT: z.string().email().optional(),
+    ALLOWED_EMAILS: z.string().optional(),
+    ALLOWED_EMAIL_DOMAIN: z.string().optional(),
     
     // Runtime (can be auto-detected by Next.js)
     NEXTAUTH_URL: z.string().url().optional(),
@@ -48,6 +50,8 @@ export const env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
     VAPID_SUBJECT: process.env.VAPID_SUBJECT,
+    ALLOWED_EMAILS: process.env.ALLOWED_EMAILS,
+    ALLOWED_EMAIL_DOMAIN: process.env.ALLOWED_EMAIL_DOMAIN,
     NEXTAUTH_URL: process.env.NEXTAUTH_URL,
     
     // Client

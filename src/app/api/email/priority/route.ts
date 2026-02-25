@@ -1,19 +1,28 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
+import { NextRequest } from "next/server";
 import { google } from "googleapis";
-import { authOptions } from "@/lib/auth";
+import { getAuthContext } from "@/lib/auth";
 import OpenAI from "openai";
 import { env } from "@/env";
+import { enforceUserQuota } from "@/lib/rateLimit";
 
-const openai = new OpenAI({
-    apiKey: env.OPENAI_API_KEY,
-});
+interface PriorityEmail {
+    id: string | null | undefined;
+    subject: string;
+    senderName: string;
+    from: string;
+    snippet: string;
+    body: string;
+    date: string;
+    threadId: string | null | undefined;
+    isPersonal?: boolean;
+}
 
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
     try {
-        const session = await getServerSession(authOptions);
+        const auth = await getAuthContext(req);
 
-        if (!session?.accessToken) {
+        if (!auth?.accessToken) {
             return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
         }
 
@@ -22,7 +31,7 @@ export async function GET(req: Request) {
 
         const oauth2Client = new google.auth.OAuth2();
         oauth2Client.setCredentials({
-            access_token: session.accessToken,
+            access_token: auth.accessToken,
         });
 
         const gmail = google.gmail({ version: "v1", auth: oauth2Client });
@@ -40,7 +49,7 @@ export async function GET(req: Request) {
         });
 
         const messages = response.data.messages || [];
-        const emailDetails = await Promise.all(
+        const emailDetails: PriorityEmail[] = await Promise.all(
             messages.map(async (msg) => {
                 const detail = await gmail.users.messages.get({
                     userId: "me",
@@ -60,7 +69,13 @@ export async function GET(req: Request) {
                 let body = "";
                 const parts = detail.data.payload?.parts || [];
 
-                function getBody(parts: any[]): string {
+                type MessagePart = {
+                    mimeType?: string | null;
+                    body?: { data?: string | null } | null;
+                    parts?: MessagePart[] | null;
+                };
+
+                function getBody(parts: MessagePart[]): string {
                     // Try to find HTML first
                     for (const part of parts) {
                         if (part.mimeType === "text/html" && part.body?.data) {
@@ -101,6 +116,17 @@ export async function GET(req: Request) {
 
         // Classify emails using AI
         if (emailDetails.length > 0 && env.OPENAI_API_KEY) {
+            const quota = enforceUserQuota(auth.userId, "email-priority", {
+                perMinute: 8,
+                perDay: 400,
+            });
+            if (!quota.allowed) {
+                return NextResponse.json(
+                    { error: "Quota exceeded. Please try again later." },
+                    { status: 429, headers: { "Retry-After": String(quota.retryAfterSeconds) } }
+                );
+            }
+
             const classificationPrompt = `Classify the following emails as "personal" (from a real person, direct communication) or "other" (automated, newsletter, receipt, etc.). Respond with a JSON object containing an array "isPersonal" of booleans corresponding to each email.
             
             Emails:
@@ -108,6 +134,7 @@ export async function GET(req: Request) {
             `;
 
             try {
+                const openai = new OpenAI({ apiKey: env.OPENAI_API_KEY });
                 const classification = await openai.chat.completions.create({
                     model: "gpt-4o",
                     messages: [
@@ -124,7 +151,7 @@ export async function GET(req: Request) {
                     if (Array.isArray(isPersonalList)) {
                         emailDetails.forEach((email, index) => {
                             if (index < isPersonalList.length) {
-                                (email as any).isPersonal = !!isPersonalList[index];
+                                email.isPersonal = !!isPersonalList[index];
                             }
                         });
                     }

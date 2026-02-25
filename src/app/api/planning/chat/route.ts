@@ -1,51 +1,33 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { NextRequest } from "next/server";
+import { getAuthContext } from "@/lib/auth";
 import { google } from "googleapis";
 import OpenAI from "openai";
 import { SYSTEM_PROMPT } from "@/lib/ai/systemPrompt";
 import { env } from "@/env";
-
-// Simple in-memory rate limiter
-const rateLimit = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 10; // 10 requests per minute
-
-function checkRateLimit(identifier: string): boolean {
-    const now = Date.now();
-    const userLimit = rateLimit.get(identifier);
-
-    if (!userLimit || now > userLimit.resetTime) {
-        rateLimit.set(identifier, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
-        return true;
-    }
-
-    if (userLimit.count >= RATE_LIMIT_MAX_REQUESTS) {
-        return false;
-    }
-
-    userLimit.count++;
-    return true;
-}
+import { enforceUserQuota } from "@/lib/rateLimit";
 
 interface ChatRequest {
     messages: { role: "user" | "assistant"; content: string }[];
     timezone?: string;
 }
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
     try {
-        // Rate limiting
-        const clientIP = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
-        if (!checkRateLimit(clientIP)) {
-            return NextResponse.json({
-                error: "Rate limit exceeded. Please try again later."
-            }, { status: 429 });
+        const auth = await getAuthContext(req);
+        if (!auth?.accessToken) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        const session = await getServerSession(authOptions);
-        if (!session) {
-            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        const quota = enforceUserQuota(auth.userId, "planning-chat", {
+            perMinute: 10,
+            perDay: 240,
+        });
+        if (!quota.allowed) {
+            return NextResponse.json(
+                { error: "Rate limit exceeded. Please try again later." },
+                { status: 429, headers: { "Retry-After": String(quota.retryAfterSeconds) } }
+            );
         }
 
         const body = (await req.json()) as ChatRequest;
@@ -57,8 +39,8 @@ export async function POST(req: Request) {
             env.GOOGLE_CLIENT_SECRET
         );
         oauth2Client.setCredentials({
-            access_token: session.accessToken,
-            refresh_token: session.refreshToken,
+            access_token: auth.accessToken,
+            refresh_token: auth.refreshToken,
         });
 
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });

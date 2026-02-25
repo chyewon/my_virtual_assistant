@@ -1,27 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { google } from "googleapis";
-import { authOptions } from "@/lib/auth";
+import { getAuthContext } from "@/lib/auth";
 
 // CREATE a new event
 export async function POST(request: NextRequest) {
     try {
-        const session = await getServerSession(authOptions);
-
-        if (!session?.accessToken) {
+        const auth = await getAuthContext(request);
+        if (!auth?.accessToken) {
             return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
         }
 
         const body = await request.json();
-        const { title, description, startTime, endTime, location, attendees, addMeet } = body;
+        const { title, description, startTime, endTime, location, attendees, addMeet, isAllDay, recurrence } = body;
 
-        if (!title || !startTime || !endTime) {
+        if (!title || !startTime) {
             return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
         }
 
         const oauth2Client = new google.auth.OAuth2();
         oauth2Client.setCredentials({
-            access_token: session.accessToken,
+            access_token: auth.accessToken,
         });
 
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });
@@ -30,15 +28,23 @@ export async function POST(request: NextRequest) {
             summary: title,
             description: description || "",
             location: location || "",
-            start: {
+        };
+
+        // Handle all-day vs timed events
+        if (isAllDay) {
+            // All-day events use 'date' instead of 'dateTime'
+            eventData.start = { date: startTime };
+            eventData.end = { date: endTime || startTime };
+        } else {
+            eventData.start = {
                 dateTime: new Date(startTime).toISOString(),
                 timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
-            end: {
+            };
+            eventData.end = {
                 dateTime: new Date(endTime).toISOString(),
                 timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-            },
-        };
+            };
+        }
 
         // Add attendees if provided
         if (attendees && attendees.length > 0) {
@@ -53,6 +59,32 @@ export async function POST(request: NextRequest) {
                     conferenceSolutionKey: { type: "hangoutsMeet" },
                 },
             };
+        }
+
+        // Add recurrence rule if provided
+        if (recurrence && recurrence.frequency !== "none") {
+            const freqMap: Record<string, string> = {
+                daily: "DAILY",
+                weekly: "WEEKLY",
+                monthly: "MONTHLY",
+                yearly: "YEARLY",
+            };
+
+            let rrule = `RRULE:FREQ=${freqMap[recurrence.frequency]}`;
+
+            if (recurrence.interval > 1) {
+                rrule += `;INTERVAL=${recurrence.interval}`;
+            }
+
+            if (recurrence.endType === "count" && recurrence.count) {
+                rrule += `;COUNT=${recurrence.count}`;
+            } else if (recurrence.endType === "until" && recurrence.until) {
+                // Format: YYYYMMDD
+                const untilDate = recurrence.until.replace(/-/g, "");
+                rrule += `;UNTIL=${untilDate}`;
+            }
+
+            eventData.recurrence = [rrule];
         }
 
         const event = await calendar.events.insert({
@@ -83,9 +115,8 @@ export async function POST(request: NextRequest) {
 // UPDATE an existing event (supports partial updates)
 export async function PUT(request: NextRequest) {
     try {
-        const session = await getServerSession(authOptions);
-
-        if (!session?.accessToken) {
+        const auth = await getAuthContext(request);
+        if (!auth?.accessToken) {
             return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
         }
 
@@ -98,7 +129,7 @@ export async function PUT(request: NextRequest) {
 
         const oauth2Client = new google.auth.OAuth2();
         oauth2Client.setCredentials({
-            access_token: session.accessToken,
+            access_token: auth.accessToken,
         });
 
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });
@@ -157,9 +188,8 @@ export async function PUT(request: NextRequest) {
 // DELETE an event
 export async function DELETE(request: NextRequest) {
     try {
-        const session = await getServerSession(authOptions);
-
-        if (!session?.accessToken) {
+        const auth = await getAuthContext(request);
+        if (!auth?.accessToken) {
             return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
         }
 
@@ -172,7 +202,7 @@ export async function DELETE(request: NextRequest) {
 
         const oauth2Client = new google.auth.OAuth2();
         oauth2Client.setCredentials({
-            access_token: session.accessToken,
+            access_token: auth.accessToken,
         });
 
         const calendar = google.calendar({ version: "v3", auth: oauth2Client });

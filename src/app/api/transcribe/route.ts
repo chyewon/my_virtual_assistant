@@ -1,39 +1,39 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/lib/auth";
+import { NextRequest } from "next/server";
+import { getAuthContext } from "@/lib/auth";
 import OpenAI from "openai";
 import { env } from "@/env";
+import { enforceUserQuota } from "@/lib/rateLimit";
 
-// Simple in-memory rate limiter
-const rateLimit = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX_REQUESTS = 5; // 5 transcription requests per minute
+const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
+const ALLOWED_AUDIO_TYPES = new Set([
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/webm",
+    "audio/ogg",
+    "audio/flac",
+    "audio/x-m4a",
+]);
 
-function checkRateLimit(identifier: string): boolean {
-    const now = Date.now();
-    const userLimit = rateLimit.get(identifier);
-
-    if (!userLimit || now > userLimit.resetTime) {
-        rateLimit.set(identifier, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
-        return true;
-    }
-
-    if (userLimit.count >= RATE_LIMIT_MAX_REQUESTS) {
-        return false;
-    }
-
-    userLimit.count++;
-    return true;
-}
-
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
     try {
-        // Rate limiting
-        const clientIP = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
-        if (!checkRateLimit(clientIP)) {
-            return NextResponse.json({
-                error: "Rate limit exceeded. Please try again later."
-            }, { status: 429 });
+        const auth = await getAuthContext(req);
+        if (!auth?.accessToken) {
+            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+        }
+
+        const quota = enforceUserQuota(auth.userId, "transcribe", {
+            perMinute: 5,
+            perDay: 80,
+        });
+        if (!quota.allowed) {
+            return NextResponse.json(
+                { error: "Rate limit exceeded. Please try again later." },
+                { status: 429, headers: { "Retry-After": String(quota.retryAfterSeconds) } }
+            );
         }
 
         if (!env.OPENAI_API_KEY) {
@@ -46,11 +46,6 @@ export async function POST(req: Request) {
             apiKey: env.OPENAI_API_KEY,
         });
 
-        const session = await getServerSession(authOptions);
-        if (!session) {
-            return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-        }
-
         const formData = await req.formData();
         const file = formData.get("file") as File;
 
@@ -58,9 +53,12 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "No file provided" }, { status: 400 });
         }
 
-        // Convert File to Buffer/ReadStream if needed, but OpenAI SDK v4+ supports File/Blob directly from FormData
-        // However, in Node environment, we might need a workaround if using standard Request
-        // Let's try passing directly first.
+        if (file.size <= 0 || file.size > MAX_AUDIO_BYTES) {
+            return NextResponse.json({ error: "Invalid file size. Maximum size is 10MB." }, { status: 400 });
+        }
+        if (!ALLOWED_AUDIO_TYPES.has(file.type)) {
+            return NextResponse.json({ error: "Unsupported audio format." }, { status: 400 });
+        }
 
         const transcription = await openai.audio.transcriptions.create({
             file: file,

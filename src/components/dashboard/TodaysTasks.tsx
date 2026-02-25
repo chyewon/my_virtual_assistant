@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import PlacesAutocomplete from "@/components/PlacesAutocomplete";
+import { SearchInput } from "@/components/search/SearchInput";
+import { useDebounce } from "@/hooks/useDebounce";
 
 interface Attendee {
     email: string;
@@ -53,12 +55,45 @@ interface ChatMessage {
     timestamp: Date;
 }
 
+// Custom tag interface
+interface TaskTag {
+    id: string;
+    name: string;
+    color: string;
+    bgColor: string;
+    borderColor: string;
+}
+
+// Default tags
+const DEFAULT_TAGS: TaskTag[] = [
+    { id: "urgent", name: "Urgent", color: "text-red-300", bgColor: "bg-red-500/20", borderColor: "border-red-500/50" },
+    { id: "important", name: "Important", color: "text-orange-300", bgColor: "bg-orange-500/20", borderColor: "border-orange-500/50" },
+    { id: "work", name: "Work", color: "text-blue-300", bgColor: "bg-blue-500/20", borderColor: "border-blue-500/50" },
+    { id: "personal", name: "Personal", color: "text-purple-300", bgColor: "bg-purple-500/20", borderColor: "border-purple-500/50" },
+    { id: "meeting", name: "Meeting", color: "text-cyan-300", bgColor: "bg-cyan-500/20", borderColor: "border-cyan-500/50" },
+];
+
+// Available colors for custom tags
+const TAG_COLORS = [
+    { name: "Red", color: "text-red-300", bgColor: "bg-red-500/20", borderColor: "border-red-500/50", preview: "bg-red-500" },
+    { name: "Orange", color: "text-orange-300", bgColor: "bg-orange-500/20", borderColor: "border-orange-500/50", preview: "bg-orange-500" },
+    { name: "Yellow", color: "text-yellow-300", bgColor: "bg-yellow-500/20", borderColor: "border-yellow-500/50", preview: "bg-yellow-500" },
+    { name: "Green", color: "text-green-300", bgColor: "bg-green-500/20", borderColor: "border-green-500/50", preview: "bg-green-500" },
+    { name: "Cyan", color: "text-cyan-300", bgColor: "bg-cyan-500/20", borderColor: "border-cyan-500/50", preview: "bg-cyan-500" },
+    { name: "Blue", color: "text-blue-300", bgColor: "bg-blue-500/20", borderColor: "border-blue-500/50", preview: "bg-blue-500" },
+    { name: "Purple", color: "text-purple-300", bgColor: "bg-purple-500/20", borderColor: "border-purple-500/50", preview: "bg-purple-500" },
+    { name: "Pink", color: "text-pink-300", bgColor: "bg-pink-500/20", borderColor: "border-pink-500/50", preview: "bg-pink-500" },
+];
+
 const statusConfig = {
     current: { icon: "🔴", label: "Now", bg: "bg-red-500/20 border-red-500/50" },
     upcoming: { icon: "🟡", label: "Later", bg: "bg-yellow-500/20 border-yellow-500/50" },
     completed: { icon: "✅", label: "Done", bg: "bg-green-500/20 border-green-500/50" },
     missed: { icon: "❌", label: "Missed", bg: "bg-slate-500/20 border-slate-500/50" },
 };
+
+// localStorage key for persisting manually-marked event completion status
+const COMPLETED_EVENTS_KEY = "va-completed-calendar-events";
 
 interface TodaysTasksProps {
     expanded?: boolean;
@@ -82,12 +117,122 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
         due?: string;
         status: string;
         completed?: string;
+        createdAt?: string;
+        completionDuration?: string;
         listId: string;
         listTitle: string;
     }>>([]);
     const [vaTasksLoading, setVaTasksLoading] = useState(false);
     const [newVaTaskTitle, setNewVaTaskTitle] = useState("");
     const [showVaTaskInput, setShowVaTaskInput] = useState(false);
+
+    // Custom Tags State
+    const [customTags, setCustomTags] = useState<TaskTag[]>([]);
+    const [taskTags, setTaskTags] = useState<Record<string, string[]>>({}); // eventId -> tagIds[]
+    const [showTagManager, setShowTagManager] = useState(false);
+    const [newTagName, setNewTagName] = useState("");
+    const [newTagColorIndex, setNewTagColorIndex] = useState(0);
+    const [tagDropdownTask, setTagDropdownTask] = useState<string | null>(null);
+
+    // Search state
+    const [searchQuery, setSearchQuery] = useState("");
+    const debouncedSearch = useDebounce(searchQuery, 200);
+
+    const filteredTasks = useMemo(() => {
+        if (!debouncedSearch) return tasks;
+        const query = debouncedSearch.toLowerCase();
+        return tasks.filter(task =>
+            task.title?.toLowerCase().includes(query) ||
+            task.description?.toLowerCase().includes(query)
+        );
+    }, [tasks, debouncedSearch]);
+
+    const filteredVaTasks = useMemo(() => {
+        // Filter out completed tasks - they appear in Activity Log instead
+        const pendingTasks = vaTasks.filter(task => task.status !== 'completed');
+        if (!debouncedSearch) return pendingTasks;
+        const query = debouncedSearch.toLowerCase();
+        return pendingTasks.filter(task =>
+            task.title?.toLowerCase().includes(query) ||
+            task.notes?.toLowerCase().includes(query)
+        );
+    }, [vaTasks, debouncedSearch]);
+
+    // Load tags from localStorage
+    useEffect(() => {
+        const savedTags = localStorage.getItem("va-custom-tags");
+        const savedTaskTags = localStorage.getItem("va-task-tags");
+        if (savedTags) {
+            try {
+                setCustomTags(JSON.parse(savedTags));
+            } catch (e) {
+                setCustomTags([]);
+            }
+        }
+        if (savedTaskTags) {
+            try {
+                setTaskTags(JSON.parse(savedTaskTags));
+            } catch (e) {
+                setTaskTags({});
+            }
+        }
+    }, []);
+
+    // Save tags to localStorage
+    useEffect(() => {
+        localStorage.setItem("va-custom-tags", JSON.stringify(customTags));
+    }, [customTags]);
+
+    useEffect(() => {
+        localStorage.setItem("va-task-tags", JSON.stringify(taskTags));
+    }, [taskTags]);
+
+    // All available tags (default + custom)
+    const allTags = [...DEFAULT_TAGS, ...customTags];
+
+    // Tag management functions
+    const addCustomTag = () => {
+        if (!newTagName.trim()) return;
+        const colorConfig = TAG_COLORS[newTagColorIndex];
+        const newTag: TaskTag = {
+            id: `custom-${Date.now()}`,
+            name: newTagName.trim(),
+            color: colorConfig.color,
+            bgColor: colorConfig.bgColor,
+            borderColor: colorConfig.borderColor,
+        };
+        setCustomTags(prev => [...prev, newTag]);
+        setNewTagName("");
+        setNewTagColorIndex(0);
+    };
+
+    const deleteCustomTag = (tagId: string) => {
+        setCustomTags(prev => prev.filter(t => t.id !== tagId));
+        // Remove tag from all tasks
+        setTaskTags(prev => {
+            const updated = { ...prev };
+            for (const taskId in updated) {
+                updated[taskId] = updated[taskId].filter(id => id !== tagId);
+            }
+            return updated;
+        });
+    };
+
+    const toggleTaskTag = (taskId: string, tagId: string) => {
+        setTaskTags(prev => {
+            const current = prev[taskId] || [];
+            if (current.includes(tagId)) {
+                return { ...prev, [taskId]: current.filter(id => id !== tagId) };
+            } else {
+                return { ...prev, [taskId]: [...current, tagId] };
+            }
+        });
+    };
+
+    const getTaskTags = (taskId: string): TaskTag[] => {
+        const tagIds = taskTags[taskId] || [];
+        return tagIds.map(id => allTags.find(t => t.id === id)).filter(Boolean) as TaskTag[];
+    };
 
     // Chat State
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -520,7 +665,15 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                 <button onClick={goToNextDay} className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded">→</button>
             </div>
 
-            <div className="text-xs text-slate-500 mb-2">{tasks.length} event{tasks.length !== 1 ? "s" : ""}</div>
+            <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-slate-500">{filteredTasks.length} event{filteredTasks.length !== 1 ? "s" : ""}</span>
+                <SearchInput
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    placeholder="Search tasks..."
+                    className="w-32"
+                />
+            </div>
 
             {/* VA Tasks Row - Spans both columns when expanded */}
             {expanded && (
@@ -612,11 +765,15 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
 
                     {vaTasksLoading ? (
                         <div className="text-sm text-slate-400 py-2">Loading VA Tasks...</div>
-                    ) : vaTasks.length === 0 && !showVaTaskInput ? (
-                        <div className="text-sm text-slate-500 py-2">No tasks in VA Tasks list. Click "+ Add Task" to create one.</div>
+                    ) : filteredVaTasks.length === 0 && !showVaTaskInput ? (
+                        debouncedSearch ? (
+                            <p className="text-xs text-slate-500 italic py-2">No VA tasks match &quot;{debouncedSearch}&quot;</p>
+                        ) : (
+                            <div className="text-sm text-slate-500 py-2">No tasks in VA Tasks list. Click &quot;+ Add Task&quot; to create one.</div>
+                        )
                     ) : (
                         <div className="flex flex-wrap gap-2">
-                            {vaTasks.map((task) => (
+                            {filteredVaTasks.map((task) => (
                                 <div
                                     key={task.id}
                                     className={`group flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-all ${task.status === 'completed'
@@ -643,6 +800,10 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                                         completed: newStatus,
                                                     }),
                                                 });
+                                                // Refresh to get completion duration if task was completed
+                                                if (newStatus) {
+                                                    fetchVaTasks();
+                                                }
                                             } catch (err) {
                                                 console.error("Failed to toggle task:", err);
                                                 fetchVaTasks();
@@ -677,6 +838,16 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                     >
                                         {task.title}
                                     </span>
+
+                                    {/* Completion duration badge */}
+                                    {task.status === 'completed' && task.completionDuration && (
+                                        <span
+                                            className="text-[10px] px-1.5 py-0.5 bg-green-500/30 text-green-200 rounded-full border border-green-500/40"
+                                            title={`Completed in ${task.completionDuration}`}
+                                        >
+                                            🏆 {task.completionDuration}
+                                        </span>
+                                    )}
 
                                     {/* Delete button */}
                                     <button
@@ -716,14 +887,18 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                         }
                     }}
                 >
-                    {tasks.length === 0 ? (
-                        <div className="text-center text-slate-500 py-6 pointer-events-none">
-                            <p className="text-3xl mb-1">📭</p>
-                            <p className="text-sm">No events for {formatDateLabel().toLowerCase()}</p>
-                            <p className="text-xs mt-2">Double-click to add one</p>
-                        </div>
+                    {filteredTasks.length === 0 ? (
+                        debouncedSearch ? (
+                            <p className="p-4 text-xs text-slate-500 italic">No matches for &quot;{debouncedSearch}&quot;</p>
+                        ) : (
+                            <div className="text-center text-slate-500 py-6 pointer-events-none">
+                                <p className="text-3xl mb-1">📭</p>
+                                <p className="text-sm">No events for {formatDateLabel().toLowerCase()}</p>
+                                <p className="text-xs mt-2">Double-click to add one</p>
+                            </div>
+                        )
                     ) : (
-                        tasks.map((task) => {
+                        filteredTasks.map((task) => {
                             const config = statusConfig[task.status];
                             const isSelected = selectedTask?.id === task.id;
                             const isExpanded = !expanded && expandedTask === task.id;
@@ -732,6 +907,17 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                 <div
                                     key={task.id}
                                     className={`rounded-lg border transition-all cursor-pointer ${config.bg} ${isSelected ? 'ring-2 ring-indigo-500' : ''}`}
+                                    draggable
+                                    onDragStart={(e) => {
+                                        const dragData = {
+                                            type: "calendar-event",
+                                            title: task.title,
+                                            date: task.startDateTime.toISOString().split("T")[0],
+                                            id: task.id,
+                                        };
+                                        e.dataTransfer.setData("application/json", JSON.stringify(dragData));
+                                        e.dataTransfer.effectAllowed = "copy";
+                                    }}
                                     onClick={() => {
                                         if (expanded) {
                                             setSelectedTask(task);
@@ -749,7 +935,18 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                             <div className="flex items-center gap-2">
                                                 <span className="text-sm">{config.icon}</span>
                                                 <div>
-                                                    <h3 className="font-medium text-white text-sm">{task.title}</h3>
+                                                    <div className="flex items-center gap-2 flex-wrap">
+                                                        <h3 className="font-medium text-white text-sm">{task.title}</h3>
+                                                        {/* Task Tags */}
+                                                        {getTaskTags(task.id).map(tag => (
+                                                            <span
+                                                                key={tag.id}
+                                                                className={`text-[9px] px-1.5 py-0.5 rounded-full ${tag.bgColor} ${tag.color} border ${tag.borderColor}`}
+                                                            >
+                                                                {tag.name}
+                                                            </span>
+                                                        ))}
+                                                    </div>
                                                     <span className="text-xs text-slate-400">{task.time} - {task.endTime}</span>
                                                 </div>
                                             </div>
@@ -795,6 +992,63 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                                     <span className="text-slate-300">{task.description}</span>
                                                 </div>
                                             )}
+                                            {/* Tags Section */}
+                                            <div className="flex items-start gap-2 text-xs relative">
+                                                <span className="text-slate-500">🏷️</span>
+                                                <div className="flex flex-wrap gap-1 flex-1">
+                                                    {getTaskTags(task.id).map(tag => (
+                                                        <span
+                                                            key={tag.id}
+                                                            onClick={(e) => { e.stopPropagation(); toggleTaskTag(task.id, tag.id); }}
+                                                            className={`text-[10px] px-1.5 py-0.5 rounded-full ${tag.bgColor} ${tag.color} border ${tag.borderColor} cursor-pointer hover:opacity-70`}
+                                                            title="Click to remove"
+                                                        >
+                                                            {tag.name} ×
+                                                        </span>
+                                                    ))}
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setTagDropdownTask(tagDropdownTask === task.id ? null : task.id);
+                                                        }}
+                                                        className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+                                                    >
+                                                        + Add Tag
+                                                    </button>
+                                                </div>
+                                                {/* Tag Dropdown */}
+                                                {tagDropdownTask === task.id && (
+                                                    <div
+                                                        className="absolute top-6 left-5 z-20 bg-slate-800 border border-slate-700 rounded-lg shadow-xl p-2 min-w-[150px]"
+                                                        onClick={(e) => e.stopPropagation()}
+                                                    >
+                                                        <div className="text-[10px] text-slate-500 mb-1 px-1">Select tags:</div>
+                                                        <div className="space-y-0.5 max-h-32 overflow-y-auto">
+                                                            {allTags.map(tag => {
+                                                                const isActive = (taskTags[task.id] || []).includes(tag.id);
+                                                                return (
+                                                                    <button
+                                                                        key={tag.id}
+                                                                        onClick={() => toggleTaskTag(task.id, tag.id)}
+                                                                        className={`w-full text-left text-[10px] px-2 py-1 rounded flex items-center justify-between ${isActive ? tag.bgColor + ' ' + tag.color : 'hover:bg-slate-700 text-slate-300'}`}
+                                                                    >
+                                                                        <span>{tag.name}</span>
+                                                                        {isActive && <span>✓</span>}
+                                                                    </button>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                        <div className="border-t border-slate-700 mt-1 pt-1">
+                                                            <button
+                                                                onClick={() => { setTagDropdownTask(null); setShowTagManager(true); }}
+                                                                className="w-full text-left text-[10px] px-2 py-1 rounded hover:bg-slate-700 text-indigo-400"
+                                                            >
+                                                                ⚙️ Manage Tags...
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
                                             <div className="flex gap-2 pt-2">
                                                 <button
                                                     onClick={(e) => { e.stopPropagation(); openEditModal(task); }}
@@ -819,10 +1073,26 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                                 >
                                                     🗑️ Delete
                                                 </button>
-                                                <button className="flex-1 py-1.5 bg-green-500/20 text-green-300 rounded text-xs hover:bg-green-500/30">
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTasks(prev => prev.map(t =>
+                                                            t.id === task.id ? { ...t, status: "completed" } : t
+                                                        ));
+                                                    }}
+                                                    className="flex-1 py-1.5 bg-green-500/20 text-green-300 rounded text-xs hover:bg-green-500/30"
+                                                >
                                                     ✓ Done
                                                 </button>
-                                                <button className="flex-1 py-1.5 bg-slate-500/20 text-slate-400 rounded text-xs hover:bg-slate-500/30">
+                                                <button
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setTasks(prev => prev.map(t =>
+                                                            t.id === task.id ? { ...t, status: "upcoming" } : t
+                                                        ));
+                                                    }}
+                                                    className="flex-1 py-1.5 bg-slate-500/20 text-slate-400 rounded text-xs hover:bg-slate-500/30"
+                                                >
                                                     ⭕ Incomplete
                                                 </button>
                                             </div>
@@ -884,6 +1154,68 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                         </div>
                                     </div>
                                 )}
+
+                                {/* Tags Section - Detail Panel */}
+                                <div className="space-y-2 relative">
+                                    <div className="flex items-center justify-between">
+                                        <div className="text-xs text-slate-500">🏷️ Tags</div>
+                                        <button
+                                            onClick={() => setShowTagManager(true)}
+                                            className="text-xs text-indigo-400 hover:text-indigo-300 px-2 py-0.5 rounded hover:bg-slate-700"
+                                        >
+                                            ⚙️ Manage
+                                        </button>
+                                    </div>
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {getTaskTags(selectedTask.id).map(tag => (
+                                            <span
+                                                key={tag.id}
+                                                onClick={() => toggleTaskTag(selectedTask.id, tag.id)}
+                                                className={`text-xs px-2 py-1 rounded-full ${tag.bgColor} ${tag.color} border ${tag.borderColor} cursor-pointer hover:opacity-70 flex items-center gap-1`}
+                                                title="Click to remove"
+                                            >
+                                                {tag.name} <span className="opacity-60">×</span>
+                                            </span>
+                                        ))}
+                                        <div className="relative">
+                                            <button
+                                                onClick={() => setTagDropdownTask(tagDropdownTask === `detail-${selectedTask.id}` ? null : `detail-${selectedTask.id}`)}
+                                                className="text-xs px-2 py-1 rounded-full bg-slate-700/50 text-slate-400 hover:bg-slate-700 hover:text-white transition-colors"
+                                            >
+                                                + Add Tag
+                                            </button>
+                                            {/* Tag Dropdown for Detail Panel */}
+                                            {tagDropdownTask === `detail-${selectedTask.id}` && (
+                                                <div className="absolute top-8 left-0 z-20 bg-slate-800 border border-slate-700 rounded-lg shadow-xl p-2 min-w-[150px]">
+                                                    <div className="text-[10px] text-slate-500 mb-1 px-1">Select tags:</div>
+                                                    <div className="space-y-0.5 max-h-40 overflow-y-auto">
+                                                        {allTags.map(tag => {
+                                                            const isActive = (taskTags[selectedTask.id] || []).includes(tag.id);
+                                                            return (
+                                                                <button
+                                                                    key={tag.id}
+                                                                    onClick={() => toggleTaskTag(selectedTask.id, tag.id)}
+                                                                    className={`w-full text-left text-xs px-2 py-1.5 rounded flex items-center justify-between ${isActive ? tag.bgColor + ' ' + tag.color : 'hover:bg-slate-700 text-slate-300'}`}
+                                                                >
+                                                                    <span>{tag.name}</span>
+                                                                    {isActive && <span>✓</span>}
+                                                                </button>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                    <div className="border-t border-slate-700 mt-1 pt-1">
+                                                        <button
+                                                            onClick={() => { setTagDropdownTask(null); setShowTagManager(true); }}
+                                                            className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-slate-700 text-indigo-400"
+                                                        >
+                                                            ⚙️ Manage Tags...
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
 
                                 {/* Description / Checklist */}
                                 <div className="space-y-2">
@@ -1052,10 +1384,26 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                                     >
                                         🗑️ Delete
                                     </button>
-                                    <button className="flex-1 py-2 bg-green-500/20 text-green-300 rounded-lg text-sm hover:bg-green-500/30">
+                                    <button
+                                        onClick={() => {
+                                            setTasks(prev => prev.map(t =>
+                                                t.id === selectedTask.id ? { ...t, status: "completed" } : t
+                                            ));
+                                            setSelectedTask({ ...selectedTask, status: "completed" });
+                                        }}
+                                        className="flex-1 py-2 bg-green-500/20 text-green-300 rounded-lg text-sm hover:bg-green-500/30"
+                                    >
                                         ✓ Done
                                     </button>
-                                    <button className="flex-1 py-2 bg-slate-500/20 text-slate-400 rounded-lg text-sm hover:bg-slate-500/30">
+                                    <button
+                                        onClick={() => {
+                                            setTasks(prev => prev.map(t =>
+                                                t.id === selectedTask.id ? { ...t, status: "upcoming" } : t
+                                            ));
+                                            setSelectedTask({ ...selectedTask, status: "upcoming" });
+                                        }}
+                                        className="flex-1 py-2 bg-slate-500/20 text-slate-400 rounded-lg text-sm hover:bg-slate-500/30"
+                                    >
                                         ⭕ Incomplete
                                     </button>
                                 </div>
@@ -1208,6 +1556,104 @@ export default function TodaysTasks({ expanded = false }: TodaysTasksProps) {
                             <div className="flex-1"></div>
                             <button onClick={closeModal} disabled={saving} className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600 disabled:opacity-50">Cancel</button>
                             <button onClick={handleSave} disabled={saving || !formData.title} className="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-50">{saving ? "Saving..." : "Save"}</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Tag Manager Modal */}
+            {showTagManager && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowTagManager(false)}>
+                    <div className="bg-slate-900 border border-slate-700 rounded-xl p-5 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-semibold text-white">🏷️ Manage Tags</h3>
+                            <button
+                                onClick={() => setShowTagManager(false)}
+                                className="text-slate-400 hover:text-white"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        {/* Create New Tag */}
+                        <div className="mb-4 p-3 bg-slate-800/50 rounded-lg border border-slate-700">
+                            <label className="block text-xs text-slate-400 mb-2">Create New Tag</label>
+                            <div className="flex gap-2 mb-2">
+                                <input
+                                    type="text"
+                                    value={newTagName}
+                                    onChange={(e) => setNewTagName(e.target.value)}
+                                    placeholder="Tag name..."
+                                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    onKeyDown={(e) => e.key === 'Enter' && addCustomTag()}
+                                />
+                                <button
+                                    onClick={addCustomTag}
+                                    disabled={!newTagName.trim()}
+                                    className="px-3 py-1.5 bg-indigo-500 text-white text-sm rounded-lg hover:bg-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    Add
+                                </button>
+                            </div>
+                            {/* Color Selection */}
+                            <div className="flex gap-1.5 flex-wrap">
+                                {TAG_COLORS.map((colorConfig, index) => (
+                                    <button
+                                        key={colorConfig.name}
+                                        onClick={() => setNewTagColorIndex(index)}
+                                        className={`w-6 h-6 rounded-full ${colorConfig.preview} transition-all ${newTagColorIndex === index ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-900 scale-110' : 'hover:scale-105'}`}
+                                        title={colorConfig.name}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Default Tags (non-deletable) */}
+                        <div className="mb-3">
+                            <label className="block text-xs text-slate-500 mb-2">Default Tags</label>
+                            <div className="flex flex-wrap gap-1.5">
+                                {DEFAULT_TAGS.map(tag => (
+                                    <span
+                                        key={tag.id}
+                                        className={`text-xs px-2 py-1 rounded-full ${tag.bgColor} ${tag.color} border ${tag.borderColor}`}
+                                    >
+                                        {tag.name}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Custom Tags (deletable) */}
+                        {customTags.length > 0 && (
+                            <div>
+                                <label className="block text-xs text-slate-500 mb-2">Custom Tags</label>
+                                <div className="flex flex-wrap gap-1.5">
+                                    {customTags.map(tag => (
+                                        <span
+                                            key={tag.id}
+                                            className={`group text-xs px-2 py-1 rounded-full ${tag.bgColor} ${tag.color} border ${tag.borderColor} flex items-center gap-1`}
+                                        >
+                                            {tag.name}
+                                            <button
+                                                onClick={() => deleteCustomTag(tag.id)}
+                                                className="opacity-60 hover:opacity-100 transition-opacity"
+                                                title="Delete tag"
+                                            >
+                                                ×
+                                            </button>
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="mt-4 pt-3 border-t border-slate-700">
+                            <button
+                                onClick={() => setShowTagManager(false)}
+                                className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-600"
+                            >
+                                Done
+                            </button>
                         </div>
                     </div>
                 </div>

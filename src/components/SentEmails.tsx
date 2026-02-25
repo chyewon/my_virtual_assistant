@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import EmailCard from "./EmailCard";
 import EmailDetailInline from "./EmailDetailInline";
+import { SearchInput } from "./search/SearchInput";
+import { useDebounce } from "@/hooks/useDebounce";
 
 interface SentEmail {
     id: string;
@@ -21,6 +23,19 @@ export default function SentEmails() {
     const [selectedEmail, setSelectedEmail] = useState<SentEmail | null>(null);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isCollapsed, setIsCollapsed] = useState(false);
+    const [isEmailEditing, setIsEmailEditing] = useState(false);
+    const [searchQuery, setSearchQuery] = useState("");
+    const debouncedSearch = useDebounce(searchQuery, 200);
+
+    const filteredEmails = useMemo(() => {
+        if (!debouncedSearch) return emails;
+        const query = debouncedSearch.toLowerCase();
+        return emails.filter(email =>
+            email.subject?.toLowerCase().includes(query) ||
+            email.to?.toLowerCase().includes(query) ||
+            email.snippet?.toLowerCase().includes(query)
+        );
+    }, [emails, debouncedSearch]);
 
     const fetchSentEmails = async () => {
         setIsLoading(true);
@@ -110,58 +125,84 @@ export default function SentEmails() {
                     </div>
                 </div>
 
-                <button
-                    onClick={() => setIsCollapsed(!isCollapsed)}
-                    className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-white"
-                    title={isCollapsed ? "Expand" : "Collapse"}
-                >
-                    <span className={`text-xs transition-transform duration-200 block ${isCollapsed ? '-rotate-90' : ''}`}>
-                        ▼
-                    </span>
-                </button>
+                <div className="flex items-center gap-2">
+                    {!isCollapsed && !selectedEmail && (
+                        <SearchInput
+                            value={searchQuery}
+                            onChange={setSearchQuery}
+                            placeholder="Search sent..."
+                            className="w-32"
+                        />
+                    )}
+                    <button
+                        onClick={() => fetchSentEmails()}
+                        className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-white"
+                        title="Refresh"
+                    >
+                        <span className="text-xs">🔄</span>
+                    </button>
+                    <button
+                        onClick={() => setIsCollapsed(!isCollapsed)}
+                        className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-white/40 hover:text-white"
+                        title={isCollapsed ? "Expand" : "Collapse"}
+                    >
+                        <span className={`text-xs transition-transform duration-200 block ${isCollapsed ? '-rotate-90' : ''}`}>
+                            ▼
+                        </span>
+                    </button>
+                </div>
             </div>
 
-            {!isCollapsed && selectedIds.size > 0 && !selectedEmail && (
-                <div className="absolute top-12 left-0 right-0 z-10 px-4 py-2 bg-indigo-600 flex items-center justify-between shadow-lg animate-in slide-in-from-top duration-200">
-                    <span className="text-xs font-bold text-white">{selectedIds.size} selected</span>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={() => handleAction("addLabel", Array.from(selectedIds))}
-                            className="p-1 px-2 hover:bg-white/10 rounded text-xs text-white border border-white/20"
-                        >
-                            🏷️ Tag
-                        </button>
-                        <button
-                            onClick={() => handleAction("delete", Array.from(selectedIds))}
-                            className="p-1 px-2 hover:bg-white/10 rounded text-xs text-white border border-white/20"
-                        >
-                            🗑️ Delete
-                        </button>
-                        <button
-                            onClick={() => setSelectedIds(new Set())}
-                            className="text-xs text-white/60 hover:text-white ml-2"
-                        >
-                            Cancel
-                        </button>
-                    </div>
-                </div>
-            )}
-
             {!isCollapsed && (
-                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                <div className={`flex-1 overflow-y-auto custom-scrollbar transition-all duration-300 ${selectedEmail ? (isEmailEditing ? 'max-h-[700px]' : 'max-h-[600px]') : 'max-h-[480px]'}`}>
+                    {/* Selection action bar - sticky inside scroll container */}
+                    {selectedIds.size > 0 && !selectedEmail && (
+                        <div className="sticky top-0 z-10 px-4 py-2 bg-indigo-600 flex items-center justify-between shadow-lg">
+                            <span className="text-xs font-bold text-white">{selectedIds.size} selected</span>
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => handleAction("addLabel", Array.from(selectedIds))}
+                                    className="p-1 px-2 hover:bg-white/10 rounded text-xs text-white border border-white/20"
+                                >
+                                    🏷️ Tag
+                                </button>
+                                <button
+                                    onClick={() => handleAction("delete", Array.from(selectedIds))}
+                                    className="p-1 px-2 hover:bg-white/10 rounded text-xs text-white border border-white/20"
+                                >
+                                    🗑️ Delete
+                                </button>
+                                <button
+                                    onClick={() => setSelectedIds(new Set())}
+                                    className="text-xs text-white/60 hover:text-white ml-2"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     {selectedEmail ? (
                         <EmailDetailInline
                             email={{ ...selectedEmail, from: 'me' }}
-                            onClose={() => setSelectedEmail(null)}
+                            onClose={() => {
+                                setSelectedEmail(null);
+                                setIsEmailEditing(false);
+                            }}
                             onDelete={(id) => handleAction("delete", [id])}
                             onTag={(id) => handleAction("addLabel", [id])}
+                            onEditingChange={setIsEmailEditing}
                         />
-                    ) : emails.length === 0 ? (
-                        <p className="p-4 text-xs text-white/40 italic">No sent emails found.</p>
+                    ) : filteredEmails.length === 0 ? (
+                        debouncedSearch ? (
+                            <p className="p-4 text-xs text-slate-500 italic">No matches for &quot;{debouncedSearch}&quot;</p>
+                        ) : (
+                            <p className="p-4 text-xs text-white/40 italic">No sent emails found.</p>
+                        )
                     ) : (
-                        emails.map((email) => (
+                        filteredEmails.map((email) => (
                             <EmailCard
                                 key={email.id}
+                                id={email.id}
                                 subject={email.subject}
                                 recipient={email.to}
                                 snippet={email.snippet}

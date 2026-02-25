@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -42,6 +43,9 @@ next-env.d.ts
 
 # User data
 src/data/priority_tasks.json
+src/data/activity_history.json
+src/data/hidden_items.json
+src/data/users/
 
 # IDE
 .idea/

@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { getAuthContext } from "@/lib/auth";
 import { env } from "@/env";
 
 export async function GET(request: NextRequest) {
     try {
-        const session = await getServerSession(authOptions);
+        const auth = await getAuthContext(request);
 
-        if (!session?.accessToken) {
+        if (!auth?.accessToken) {
             return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
         }
 
@@ -18,11 +17,10 @@ export async function GET(request: NextRequest) {
             return NextResponse.json({ predictions: [] });
         }
 
-        // Use Google Places Autocomplete API
-        const apiKey = env.GOOGLE_PLACES_API_KEY || env.GOOGLE_CLIENT_ID?.split("-")[0];
-
-        // If no separate Places API key, we'll use a simpler approach with the session token
-        // Google Calendar has built-in Places integration, so we simulate similar results
+        const apiKey = env.GOOGLE_PLACES_API_KEY;
+        if (!apiKey) {
+            return NextResponse.json({ predictions: [] });
+        }
 
         const response = await fetch(
             `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&types=establishment|geocode&key=${apiKey}`
