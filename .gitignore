@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# User data
+src/data/priority_tasks.json
+
+# IDE
+.idea/
+
+# Mobile app
+android/

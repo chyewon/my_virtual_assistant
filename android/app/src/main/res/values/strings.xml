@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Hyewoni VA</string>
-    <string name="title_activity_main">Hyewoni VA</string>
-    <string name="package_name">com.hyewoni.va</string>
-    <string name="custom_url_scheme">com.hyewoni.va</string>
-</resources>
